@@ -59,9 +59,9 @@ export class WineCommentGenerator {
     "keeping an eye on producers from {region}",
     "{region} has been on my radar lately",
     "would love to explore more from {region}",
-    "{region} is one of those regions worth digging into",
+    "need to try more wines from {region}",
     "don't see enough {region} wines on here",
-    "{region} quietly makes some great value bottles",
+    "{region} usually over-delivers for the price",
   ];
 
   // Grape is rarely stated on a compact activity card, so when it's not
@@ -83,7 +83,7 @@ export class WineCommentGenerator {
     "{producer} rarely misses, from what I've heard",
     "{producer} seems like a safe bet",
     "good to see {producer} on here",
-    "{producer} is a name worth remembering",
+    "hadn't heard of {producer} before, noting that down",
     "heard good things about {producer} before",
   ];
 
@@ -97,12 +97,15 @@ export class WineCommentGenerator {
     "a {rating} score usually means it's worth a look",
   ];
 
+  // Kept deliberately concrete (drinking window, aging) rather than vague
+  // filler like "an interesting year" or "a talked-about year" — that kind
+  // of hedge-y, says-nothing phrasing is a dead giveaway that a comment is
+  // generated rather than something a person actually typed.
   private static readonly VINTAGE_PHRASES: readonly string[] = [
-    "curious how the {vintage} vintage is drinking now",
-    "wondering how {vintage} is showing these days",
-    "{vintage} is an interesting year to check out",
-    "always curious how {vintage} vintages hold up",
-    "{vintage} was a talked-about year for a few regions",
+    "curious how the {vintage} is drinking already",
+    "wondering if {vintage} needs more time in the bottle",
+    "always curious how {vintage} vintages age",
+    "hoping {vintage} is showing well this early",
   ];
 
   private static readonly PAIRING_PHRASES: readonly string[] = [
