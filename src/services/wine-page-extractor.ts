@@ -1,16 +1,25 @@
-export interface ExtractedWineData {
+import type { WineContext } from "../domain/wine-context";
+import { detectGrapesInText, grapesFromWinePageHtml } from "../domain/wine-knowledge";
+
+// Internal, string-only shape used while merging multiple raw extraction
+// strategies together (JSON-LD / preloaded-state / DOM all naturally yield
+// strings). This is converted to a typed WineContext (facts only, proper
+// number types, undefined instead of null) at the boundary, right before
+// being handed to the rest of the pipeline.
+interface RawExtractedWine {
   wineName: string | null;
   producer: string | null;
   country: string | null;
   region: string | null;
   vintage: string | null;
   rating: string | null;
+  grapes: string[];
 }
 
 export class WinePageExtractor {
   private static readonly LOG_PREFIX = "🍷 [WinePageExtractor]";
 
-  public static extract(): ExtractedWineData {
+  public static extract(): WineContext {
     const fromJsonLd = this.extractFromJsonLd();
     const fromPreloadedState = this.extractFromPreloadedState();
     const fromDom = this.extractFromDom();
@@ -19,17 +28,19 @@ export class WinePageExtractor {
     console.log(`${this.LOG_PREFIX} preloaded-state ->`, fromPreloadedState);
     console.log(`${this.LOG_PREFIX} DOM fallback ->`, fromDom);
 
-    const merged: ExtractedWineData = {
+    const merged: RawExtractedWine = {
       wineName: fromJsonLd.wineName ?? fromPreloadedState.wineName ?? fromDom.wineName,
       producer: fromJsonLd.producer ?? fromPreloadedState.producer ?? fromDom.producer,
       country: fromPreloadedState.country ?? fromJsonLd.country ?? fromDom.country,
       region: fromPreloadedState.region ?? fromJsonLd.region ?? fromDom.region,
       vintage: fromPreloadedState.vintage ?? fromJsonLd.vintage ?? fromDom.vintage,
       rating: fromJsonLd.rating ?? fromPreloadedState.rating ?? fromDom.rating,
+      grapes: [],
     };
 
-    console.log(`${this.LOG_PREFIX} merged result ->`, merged);
-    return merged;
+    const context = this.toWineContext(merged);
+    console.log(`${this.LOG_PREFIX} merged result ->`, context);
+    return context;
   }
 
   // Extracts data for a single wine card in a Vivino activity feed (e.g. a
@@ -43,8 +54,13 @@ export class WinePageExtractor {
   //         meta[itemtype=".../Country"] (country code, fallback)
   //         a[href*="/explore/regions/"] (region)
   //       .wine-rating .header-large.text-block (avg. rating)
-  public static extractFromCard(cardOrDescendant: Element): ExtractedWineData {
-    const result = this.empty();
+  //
+  // Note: appellation, style, price and currency aren't wired up yet —
+  // there's no confirmed selector for them on the compact activity card.
+  // Grapes are step 1: read from the wine name when the variety is in the
+  // title. Step 2 (wine-page fetch) lives in enrichGrapes().
+  public static extractFromCard(cardOrDescendant: Element): WineContext {
+    const raw = this.empty();
     const root =
       cardOrDescendant.closest(".user-activity-item") ??
       cardOrDescendant.closest(".activity-card") ??
@@ -52,34 +68,34 @@ export class WinePageExtractor {
 
     const nameLink = root.querySelector(".wine-name a");
     if (nameLink?.textContent) {
-      result.wineName = nameLink.textContent.trim();
+      raw.wineName = nameLink.textContent.trim();
     }
 
     const producerLink = root.querySelector(".wine-info > span.text-small > a");
     if (producerLink?.textContent) {
-      result.producer = producerLink.textContent.trim();
+      raw.producer = producerLink.textContent.trim();
     }
 
     const year = root.querySelector(".activity-wine-card")?.getAttribute("data-year");
     if (year) {
-      result.vintage = year;
+      raw.vintage = year;
     }
 
     const countryLink = root.querySelector('a[data-item-type="country"]');
     if (countryLink?.textContent) {
-      result.country = countryLink.textContent.trim();
+      raw.country = countryLink.textContent.trim();
     } else {
       const countryCode = root
         .querySelector('meta[itemtype="https://schema.org/Country"]')
         ?.getAttribute("content");
       if (countryCode) {
-        result.country = countryCode.toUpperCase();
+        raw.country = countryCode.toUpperCase();
       }
     }
 
     const regionLink = root.querySelector('a[href*="/explore/regions/"]');
     if (regionLink?.textContent) {
-      result.region = regionLink.textContent.trim();
+      raw.region = regionLink.textContent.trim();
     }
 
     // The first ".header-large.text-block" in the ratings row is Vivino's
@@ -92,14 +108,65 @@ export class WinePageExtractor {
     const ratingValue = root.querySelector(".wine-rating .header-large.text-block");
     const ratingText = ratingValue?.textContent?.trim();
     if (ratingText && !/^0+[.,]?0*$/.test(ratingText)) {
-      result.rating = ratingText;
+      raw.rating = ratingText;
     }
 
-    console.log(`${this.LOG_PREFIX} extractFromCard ->`, result);
-    return result;
+    const context = this.toWineContext(raw);
+    console.log(`${this.LOG_PREFIX} extractFromCard ->`, context);
+    return context;
   }
 
-  private static empty(): ExtractedWineData {
+  public static winePageUrlFromCard(cardOrDescendant: Element): string | undefined {
+    const root =
+      cardOrDescendant.closest(".user-activity-item") ??
+      cardOrDescendant.closest(".activity-card") ??
+      cardOrDescendant;
+    const href = root.querySelector(".wine-name a")?.getAttribute("href");
+    if (!href) return undefined;
+    try {
+      return new URL(href, window.location.origin).href;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Step 2: if the wine name did not contain a grape, fetch the wine page
+  // and parse `/grapes/` links. Cached per URL; times out rather than
+  // hanging the comment panel.
+  public static async enrichGrapes(context: WineContext, winePageUrl?: string): Promise<WineContext> {
+    if (context.grapes && context.grapes.length > 0) return context;
+    if (!winePageUrl) return context;
+
+    const cached = this.grapeCache.get(winePageUrl);
+    if (cached) {
+      return cached.length > 0 ? { ...context, grapes: cached } : context;
+    }
+
+    const grapes = await this.fetchGrapesFromWinePage(winePageUrl);
+    this.grapeCache.set(winePageUrl, grapes);
+    console.log(`${this.LOG_PREFIX} enrichGrapes ->`, winePageUrl, grapes);
+    return grapes.length > 0 ? { ...context, grapes } : context;
+  }
+
+  private static readonly grapeCache = new Map<string, string[]>();
+  private static readonly FETCH_TIMEOUT_MS = 4000;
+
+  private static async fetchGrapesFromWinePage(url: string): Promise<string[]> {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), this.FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { signal: controller.signal, credentials: "same-origin" });
+      if (!response.ok) return [];
+      const html = await response.text();
+      return grapesFromWinePageHtml(html);
+    } catch {
+      return [];
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  private static empty(): RawExtractedWine {
     return {
       wineName: null,
       producer: null,
@@ -107,10 +174,42 @@ export class WinePageExtractor {
       region: null,
       vintage: null,
       rating: null,
+      grapes: [],
     };
   }
 
-  private static extractFromJsonLd(): ExtractedWineData {
+  // Converts the raw, string-only scraping result into a typed WineContext:
+  // numeric fields become real numbers (or undefined if unparsable), and
+  // null becomes undefined so "we don't know" is represented one way.
+  private static toWineContext(raw: RawExtractedWine): WineContext {
+    const grapesFromName = detectGrapesInText(raw.wineName ?? undefined);
+    const grapes = grapesFromName.length > 0 ? grapesFromName : raw.grapes;
+    return {
+      wineName: raw.wineName ?? undefined,
+      producer: raw.producer ?? undefined,
+      country: raw.country ?? undefined,
+      region: raw.region ?? undefined,
+      grapes: grapes.length > 0 ? grapes : undefined,
+      vintage: this.parseVintage(raw.vintage),
+      rating: this.parseRating(raw.rating),
+    };
+  }
+
+  private static parseVintage(value: string | null): number | undefined {
+    if (!value) return undefined;
+    const year = Number.parseInt(value, 10);
+    return Number.isFinite(year) ? year : undefined;
+  }
+
+  // Vivino renders ratings with a locale decimal comma (e.g. "3,9") as often
+  // as a dot, so both are normalized before parsing.
+  private static parseRating(value: string | null): number | undefined {
+    if (!value) return undefined;
+    const rating = Number.parseFloat(value.replace(",", "."));
+    return Number.isFinite(rating) ? rating : undefined;
+  }
+
+  private static extractFromJsonLd(): RawExtractedWine {
     const result = this.empty();
     const scripts = document.querySelectorAll('script[type="application/ld+json"]');
 
@@ -151,16 +250,12 @@ export class WinePageExtractor {
     return result;
   }
 
-  private static extractFromPreloadedState(): ExtractedWineData {
+  private static extractFromPreloadedState(): RawExtractedWine {
     const result = this.empty();
-    const nodes = document.querySelectorAll(
-      "[data-preloaded-state], [data-ssr-props]"
-    );
+    const nodes = document.querySelectorAll("[data-preloaded-state], [data-ssr-props]");
 
     for (const node of Array.from(nodes)) {
-      const raw =
-        node.getAttribute("data-preloaded-state") ??
-        node.getAttribute("data-ssr-props");
+      const raw = node.getAttribute("data-preloaded-state") ?? node.getAttribute("data-ssr-props");
       if (!raw) continue;
 
       try {
@@ -193,11 +288,7 @@ export class WinePageExtractor {
   // Generic recursive scan for plausible wine fields. The exact shape of
   // Vivino's preloaded-state JSON on a wine page hasn't been confirmed yet,
   // so this matches on key *names* rather than a fixed path.
-  private static mergeFromDeepSearch(
-    result: ExtractedWineData,
-    value: unknown,
-    depth = 0
-  ): void {
+  private static mergeFromDeepSearch(result: RawExtractedWine, value: unknown, depth = 0): void {
     if (depth > 6 || value == null || typeof value !== "object") return;
 
     if (Array.isArray(value)) {
@@ -241,7 +332,7 @@ export class WinePageExtractor {
     return name && name.trim().length > 2 ? name : null;
   }
 
-  private static extractFromDom(): ExtractedWineData {
+  private static extractFromDom(): RawExtractedWine {
     const result = this.empty();
 
     const heading = document.querySelector("h1");
