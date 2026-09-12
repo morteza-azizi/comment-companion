@@ -62,7 +62,8 @@ export class VivinoInjector {
     const trigger = this.createTrigger();
     trigger.addEventListener("click", (event) => {
       event.preventDefault();
-      this.togglePanel(trigger, widget);
+      event.stopPropagation();
+      void this.togglePanel(trigger, widget);
     });
 
     form.insertBefore(trigger, submitButton);
@@ -94,7 +95,7 @@ export class VivinoInjector {
     return button;
   }
 
-  private static togglePanel(anchor: HTMLButtonElement, widget: Element): void {
+  private static async togglePanel(anchor: HTMLButtonElement, widget: Element): Promise<void> {
     const existing = document.getElementById(this.PANEL_ID);
     const wasOpenForThisAnchor =
       existing?.dataset.forTrigger === anchor.dataset.companionTriggerId;
@@ -103,22 +104,29 @@ export class VivinoInjector {
       return;
     }
 
-    const wineData = WinePageExtractor.extractFromCard(widget);
-    const comments = WineCommentGenerator.generate(
-      {
-        region: wineData.region ?? undefined,
-        producer: wineData.producer ?? undefined,
-        rating: wineData.rating ?? undefined,
-        vintage: wineData.vintage ?? undefined,
-        wineName: wineData.wineName ?? undefined,
-      },
-      8
-    );
-
+    let wineContext = WinePageExtractor.extractFromCard(widget);
+    const winePageUrl = WinePageExtractor.winePageUrlFromCard(widget);
     const input = widget.querySelector<HTMLInputElement>(".comments__form__input input");
-    const panel = this.createPanel(comments, anchor, input);
-    panel.dataset.forTrigger = anchor.dataset.companionTriggerId ?? "";
-    document.body.appendChild(panel);
+
+    const show = (context: typeof wineContext): void => {
+      document.getElementById(this.PANEL_ID)?.remove();
+      const comments = WineCommentGenerator.generate(context, 8);
+      const panel = this.createPanel(comments, anchor, input);
+      panel.dataset.forTrigger = anchor.dataset.companionTriggerId ?? "";
+      document.body.appendChild(panel);
+      this.attachPanelDismiss(panel, anchor);
+    };
+
+    show(wineContext);
+
+    if (!wineContext.grapes?.length) {
+      wineContext = await WinePageExtractor.enrichGrapes(wineContext, winePageUrl);
+      const stillOpen = document.getElementById(this.PANEL_ID)?.dataset.forTrigger ===
+        anchor.dataset.companionTriggerId;
+      if (stillOpen && wineContext.grapes?.length) {
+        show(wineContext);
+      }
+    }
   }
 
   private static createPanel(
@@ -135,8 +143,8 @@ export class VivinoInjector {
       top: `${anchorRect.bottom + window.scrollY + 6}px`,
       left: `${anchorRect.left + window.scrollX}px`,
       zIndex: "2147483647",
-      width: "300px",
-      maxHeight: "320px",
+      width: "340px",
+      maxHeight: "400px",
       overflowY: "auto",
       background: "#fff",
       color: "#222",
@@ -148,7 +156,7 @@ export class VivinoInjector {
     });
 
     comments.forEach((comment) => {
-      panel.appendChild(this.createPanelItem(comment, panel, input));
+      panel.appendChild(this.createPanelItem(comment, input));
     });
 
     return panel;
@@ -156,7 +164,6 @@ export class VivinoInjector {
 
   private static createPanelItem(
     comment: string,
-    panel: HTMLDivElement,
     input: HTMLInputElement | null
   ): HTMLButtonElement {
     const item = document.createElement("button");
@@ -177,17 +184,47 @@ export class VivinoInjector {
       lineHeight: "1.4",
     });
 
-    item.addEventListener("click", () => {
+    item.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (item.dataset.used === "true") return;
+
       if (input) {
-        this.setReactControlledValue(input, comment);
+        this.appendComment(input, comment);
         input.focus();
       } else {
         void this.copyToClipboard(comment);
       }
-      panel.remove();
+
+      item.dataset.used = "true";
+      item.style.opacity = "0.45";
     });
 
     return item;
+  }
+
+  private static appendComment(input: HTMLInputElement, comment: string): void {
+    const current = input.value.trim();
+    const next = current ? `${current} ${comment}` : comment;
+    this.setReactControlledValue(input, next);
+  }
+
+  private static attachPanelDismiss(panel: HTMLDivElement, anchor: HTMLElement): void {
+    const dismiss = (event: Event): void => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      if (event instanceof MouseEvent) {
+        const target = event.target as Node | null;
+        if (panel.contains(target) || anchor.contains(target)) return;
+      }
+      panel.remove();
+      document.removeEventListener("mousedown", dismiss, true);
+      document.removeEventListener("keydown", dismiss);
+    };
+
+    window.setTimeout(() => {
+      document.addEventListener("mousedown", dismiss, true);
+      document.addEventListener("keydown", dismiss);
+    }, 0);
   }
 
   // Vivino's comment box is a React-controlled input. Setting `.value`
