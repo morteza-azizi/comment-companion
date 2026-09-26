@@ -17,8 +17,18 @@ export interface WineContext {
   grapes?: string[];
   vintage?: number;
   style?: string;
+  /** Normalized color/style of THIS bottle. Rosé is not the same drink as a red of the same grape. */
+  wineColor?: WineColor;
   rating?: number;
   ratingCount?: number;
+  /** This reviewer's score for this check-in, not the community average. */
+  reviewerRating?: number;
+  /** This reviewer's tasting note, if they wrote one. */
+  reviewText?: string;
   price?: number;
   currency?: string;
 }
+
+export type WineColor = "red" | "white" | "rose" | "sparkling" | "orange";
+
+export type ReviewerBand = "loved" | "liked" | "mixed" | "low";

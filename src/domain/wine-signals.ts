@@ -1,4 +1,6 @@
-import type { WineContext } from "./wine-context";
+import type { ReviewerBand, WineColor, WineContext } from "./wine-context";
+import { detectWineColor, isRose, roseCharacterFor } from "./wine-color";
+import { parseReview, reviewerBand, type ReviewTheme } from "./wine-review";
 import {
   findGrapeKnowledge,
   findRegionKnowledge,
@@ -28,6 +30,12 @@ export interface WineSignals {
   grapeKnowledge?: GrapeKnowledge;
   drinkStyle?: DrinkStyle;
   pairings: readonly string[];
+  wineColor?: WineColor;
+  isRose: boolean;
+  reviewerRating?: number;
+  reviewerBand?: ReviewerBand;
+  hasReviewText: boolean;
+  reviewThemes: ReviewTheme[];
   hasProducer: boolean;
   hasVintage: boolean;
   vintageAge?: number;
@@ -58,6 +66,14 @@ export function deriveSignals(context: WineContext, nowYear = new Date().getFull
   const associatedGrape = !primaryGrape ? regionKnowledge?.typicalGrapes[0] : undefined;
   const grapeKnowledge = findGrapeKnowledge(primaryGrape) ?? findGrapeKnowledge(associatedGrape);
 
+  const wineColor = context.wineColor ?? detectWineColor(context);
+  const rose = isRose(wineColor);
+  const drinkStyle = rose ? "fresh" : grapeKnowledge?.drinkStyle;
+  const pairings = rose
+    ? [roseCharacterFor(primaryGrape ?? grapeKnowledge?.name).pairing]
+    : (grapeKnowledge?.pairings ?? []);
+  const review = parseReview(context.reviewText, context.reviewerRating);
+
   const hasRating = typeof context.rating === "number";
   const hasPrice = typeof context.price === "number";
   const rating = context.rating ?? 0;
@@ -74,8 +90,14 @@ export function deriveSignals(context: WineContext, nowYear = new Date().getFull
     associatedGrape,
     associatedGrapeKnowledge: findGrapeKnowledge(associatedGrape),
     grapeKnowledge,
-    drinkStyle: grapeKnowledge?.drinkStyle,
-    pairings: grapeKnowledge?.pairings ?? [],
+    drinkStyle,
+    pairings,
+    wineColor,
+    isRose: rose,
+    reviewerRating: context.reviewerRating,
+    reviewerBand: review.band ?? reviewerBand(context.reviewerRating),
+    hasReviewText: Boolean(review.snippet),
+    reviewThemes: review.themes,
     hasProducer: Boolean(context.producer),
     hasVintage,
     vintageAge,

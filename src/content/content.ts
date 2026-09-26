@@ -1,9 +1,9 @@
+import { LinkedInAdapter } from "../adapters/linkedin/linkedin-adapter";
 import { VivinoAdapter } from "../adapters/vivino/vivino-adapter";
 
-const adapter = new VivinoAdapter();
+const adapters = [new VivinoAdapter(), new LinkedInAdapter()];
+const adapter = adapters.find((item) => item.isSupported());
 
-console.log("🍷 Comment Companion loaded");
-
-if (adapter.isSupported()) {
+if (adapter) {
   adapter.inject();
 }
