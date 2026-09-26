@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { detectGrapesInText, grapesFromWinePageHtml } from "./wine-knowledge";
+import {
+  detectGrapesInText,
+  findGrapeKnowledge,
+  grapesFromWinePageHtml,
+  KNOWN_GRAPE_NAMES,
+} from "./wine-knowledge";
 
 describe("detectGrapesInText", () => {
   it("reads a grape that is literally in the wine name", () => {
@@ -10,6 +15,23 @@ describe("detectGrapesInText", () => {
   it("does not invent a grape from a branded cuvée name", () => {
     expect(detectGrapesInText("Le Caprice")).toEqual([]);
     expect(detectGrapesInText("Reserve")).toEqual([]);
+  });
+
+  it("covers a broad catalog of grapes that actually show up on Vivino", () => {
+    expect(KNOWN_GRAPE_NAMES.length).toBeGreaterThanOrEqual(60);
+    expect(KNOWN_GRAPE_NAMES).toEqual([...new Set(KNOWN_GRAPE_NAMES)]);
+  });
+
+  it("does not treat Petite Sirah as Syrah or Cabernet Sauvignon as Sauvignon Blanc", () => {
+    expect(findGrapeKnowledge("Petite Sirah")?.name).toBe("Petite Sirah");
+    expect(findGrapeKnowledge("Cabernet Sauvignon")?.name).toBe("Cabernet Sauvignon");
+    expect(findGrapeKnowledge("Sauvignon Blanc")?.name).toBe("Sauvignon Blanc");
+  });
+
+  it("reads Müller-Thurgau from the label, including the umlaut form", () => {
+    expect(detectGrapesInText("Müller-Thurgau 2023")).toEqual(["Müller-Thurgau"]);
+    expect(detectGrapesInText("Muller-Thurgau Kabinett")).toEqual(["Müller-Thurgau"]);
+    expect(detectGrapesInText("Rivaner Trocken")).toEqual(["Müller-Thurgau"]);
   });
 
   it("prefers the longer match so Cabernet Franc is not swallowed by Sauvignon", () => {

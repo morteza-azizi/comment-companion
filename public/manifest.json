@@ -7,12 +7,13 @@
   "permissions": ["storage"],
 
   "host_permissions": [
-    "https://www.vivino.com/*"
+    "https://www.vivino.com/*",
+    "https://www.linkedin.com/*"
   ],
 
   "content_scripts": [
     {
-      "matches": ["https://www.vivino.com/*"],
+      "matches": ["https://www.vivino.com/*", "https://www.linkedin.com/*"],
       "js": ["src/content/content.ts"]
     }
   ],

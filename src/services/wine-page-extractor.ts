@@ -1,3 +1,4 @@
+import { detectWineColor } from "../domain/wine-color";
 import type { WineContext } from "../domain/wine-context";
 import { detectGrapesInText, grapesFromWinePageHtml } from "../domain/wine-knowledge";
 
@@ -13,6 +14,9 @@ interface RawExtractedWine {
   region: string | null;
   vintage: string | null;
   rating: string | null;
+  reviewerRating: string | null;
+  reviewText: string | null;
+  style: string | null;
   grapes: string[];
 }
 
@@ -35,6 +39,9 @@ export class WinePageExtractor {
       region: fromPreloadedState.region ?? fromJsonLd.region ?? fromDom.region,
       vintage: fromPreloadedState.vintage ?? fromJsonLd.vintage ?? fromDom.vintage,
       rating: fromJsonLd.rating ?? fromPreloadedState.rating ?? fromDom.rating,
+      reviewerRating: fromDom.reviewerRating ?? fromPreloadedState.reviewerRating,
+      reviewText: fromDom.reviewText ?? fromPreloadedState.reviewText,
+      style: fromDom.style ?? fromPreloadedState.style ?? fromJsonLd.style,
       grapes: [],
     };
 
@@ -99,17 +106,19 @@ export class WinePageExtractor {
     }
 
     // The first ".header-large.text-block" in the ratings row is Vivino's
-    // community average rating for the wine (not the profile owner's own
-    // star rating for this specific post — that's a separate element we
-    // don't have a confirmed selector for yet). "0.0"/"0,0" means the wine
-    // doesn't have enough ratings yet, not that it's actually rated zero,
-    // so that case is treated as no rating at all to avoid nonsense like
-    // "that 0.0 rating stands out".
+    // community average. The reviewer's own stars and tasting note live
+    // outside .wine-rating and are read separately. "0.0"/"0,0" means the
+    // wine doesn't have enough ratings yet, not that it's actually rated
+    // zero, so that case is treated as no rating at all.
     const ratingValue = root.querySelector(".wine-rating .header-large.text-block");
     const ratingText = ratingValue?.textContent?.trim();
     if (ratingText && !/^0+[.,]?0*$/.test(ratingText)) {
       raw.rating = ratingText;
     }
+
+    raw.reviewerRating = this.extractReviewerRating(root);
+    raw.reviewText = this.extractReviewText(root);
+    raw.style = this.extractStyle(root, raw.wineName);
 
     const context = this.toWineContext(raw);
     console.log(`${this.LOG_PREFIX} extractFromCard ->`, context);
@@ -174,6 +183,9 @@ export class WinePageExtractor {
       region: null,
       vintage: null,
       rating: null,
+      reviewerRating: null,
+      reviewText: null,
+      style: null,
       grapes: [],
     };
   }
@@ -184,15 +196,97 @@ export class WinePageExtractor {
   private static toWineContext(raw: RawExtractedWine): WineContext {
     const grapesFromName = detectGrapesInText(raw.wineName ?? undefined);
     const grapes = grapesFromName.length > 0 ? grapesFromName : raw.grapes;
+    const reviewText = raw.reviewText ?? undefined;
+    const style = raw.style ?? undefined;
+    const wineName = raw.wineName ?? undefined;
+    const region = raw.region ?? undefined;
     return {
-      wineName: raw.wineName ?? undefined,
+      wineName,
       producer: raw.producer ?? undefined,
       country: raw.country ?? undefined,
-      region: raw.region ?? undefined,
+      region,
       grapes: grapes.length > 0 ? grapes : undefined,
       vintage: this.parseVintage(raw.vintage),
+      style,
+      wineColor: detectWineColor({ wineName, style, reviewText, region }),
       rating: this.parseRating(raw.rating),
+      reviewerRating: this.parseRating(raw.reviewerRating),
+      reviewText,
     };
+  }
+
+  private static extractReviewerRating(root: Element): string | null {
+    const attrHost = root.querySelector("[data-user-rating], [data-reviewer-rating]");
+    const attr = attrHost?.getAttribute("data-user-rating") ?? attrHost?.getAttribute("data-reviewer-rating");
+    if (attr && !this.isEmptyRating(attr)) return attr;
+
+    for (const el of Array.from(root.querySelectorAll("[aria-label]"))) {
+      if (el.closest(".wine-rating")) continue;
+      const label = el.getAttribute("aria-label") ?? "";
+      const match =
+        label.match(/(?:you rated|your rating|rated|gave|rating)\s*([1-5](?:[.,]\d)?)/i) ??
+        label.match(/([1-5](?:[.,]\d)?)\s*(?:stars?|\/\s*5)/i);
+      if (match?.[1] && !this.isEmptyRating(match[1])) return match[1];
+    }
+
+    const numeric = root.querySelector(
+      ".user-rating .header-large, .activity-rating .header-large, [class*='userRating'] .header-large, [class*='UserRating'] [class*='ratingValue']"
+    );
+    if (numeric && !numeric.closest(".wine-rating")) {
+      const text = numeric.textContent?.trim() ?? "";
+      if (/^[1-5]([.,]\d)?$/.test(text) && !this.isEmptyRating(text)) return text;
+    }
+
+    return null;
+  }
+
+  private static extractReviewText(root: Element): string | null {
+    const selectors = [
+      "[class*='activityNote']",
+      "[class*='activity-note']",
+      "[class*='tasteNote']",
+      "[class*='tastingNote']",
+      "[class*='tasting-note']",
+      "[class*='reviewNote']",
+      "[class*='review-note']",
+      "[class*='user-note']",
+      "[class*='userNote']",
+      ".activity-text",
+      ".activity-description",
+      ".activity-comment",
+      ".activity-note",
+    ];
+    for (const selector of selectors) {
+      const text = this.cleanReviewText(root.querySelector(selector)?.textContent);
+      if (text) return text;
+    }
+
+    for (const el of Array.from(root.querySelectorAll("p, [class*='Note'], [class*='note']"))) {
+      if (el.closest(".wine-info, .wine-name, .wine-rating, .comments__form")) continue;
+      const text = this.cleanReviewText(el.textContent);
+      if (text) return text;
+    }
+    return null;
+  }
+
+  private static extractStyle(root: Element, wineName: string | null): string | null {
+    const labeled = root.querySelector("[class*='wine-style'], [class*='wineStyle'], [data-wine-style]");
+    const text = labeled?.textContent?.trim() || labeled?.getAttribute("data-wine-style")?.trim();
+    if (text) return text;
+    return wineName && /ros[eé]|rosato|rosado|blanc de|sparkling|prosecco/i.test(wineName) ? wineName : null;
+  }
+
+  private static cleanReviewText(value: string | null | undefined): string | null {
+    if (!value) return null;
+    const text = value.replace(/\s+/g, " ").trim();
+    if (text.length < 8) return null;
+    if (/^[1-5]([.,]\d)?$/.test(text)) return null;
+    if (/^(add a note|write a review|see more|read more|show more)$/i.test(text)) return null;
+    return text;
+  }
+
+  private static isEmptyRating(value: string): boolean {
+    return /^0+[.,]?0*$/.test(value);
   }
 
   private static parseVintage(value: string | null): number | undefined {
@@ -244,6 +338,13 @@ export class WinePageExtractor {
       const aggregateRating = obj.aggregateRating as Record<string, unknown> | undefined;
       if (!result.rating && aggregateRating?.ratingValue != null) {
         result.rating = String(aggregateRating.ratingValue);
+      }
+      const reviewRating = obj.reviewRating as Record<string, unknown> | undefined;
+      if (!result.reviewerRating && reviewRating?.ratingValue != null) {
+        result.reviewerRating = String(reviewRating.ratingValue);
+      }
+      if (!result.reviewText && typeof obj.reviewBody === "string") {
+        result.reviewText = this.cleanReviewText(obj.reviewBody);
       }
     }
 
@@ -312,6 +413,14 @@ export class WinePageExtractor {
         if (typeof val === "number" || typeof val === "string") {
           result.vintage = String(val);
         }
+      } else if (!result.reviewerRating && /(user|reviewer|personal)_?rating/.test(k)) {
+        if (typeof val === "number" || typeof val === "string") {
+          result.reviewerRating = String(val);
+        }
+      } else if (!result.reviewText && /(taste_?note|review_?(body|text|note)|activity_?note)/.test(k) && typeof val === "string") {
+        result.reviewText = this.cleanReviewText(val);
+      } else if (!result.style && /^style$|wine_?style/.test(k) && typeof val === "string") {
+        result.style = val;
       } else if (!result.rating && /rating/.test(k)) {
         if (typeof val === "number" || typeof val === "string") {
           result.rating = String(val);

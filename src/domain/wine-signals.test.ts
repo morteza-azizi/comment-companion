@@ -77,4 +77,23 @@ describe("deriveSignals", () => {
     expect(deriveSignals({ grapes: ["Malbec"] }).pairings).toContain("a good steak");
     expect(deriveSignals({}).pairings).toEqual([]);
   });
+
+  it("treats rosé as a fresh wine with rosé food, not the red-grape pairing", () => {
+    const signals = deriveSignals({ grapes: ["Pinot Noir"], wineColor: "rose" });
+    expect(signals.isRose).toBe(true);
+    expect(signals.drinkStyle).toBe("fresh");
+    expect(signals.pairings.join(" ")).not.toMatch(/duck|steak/i);
+    expect(signals.pairings.join(" ")).toMatch(/salmon|salad/i);
+  });
+
+  it("parses the reviewer's score and note into signals", () => {
+    const signals = deriveSignals({
+      grapes: ["Malbec"],
+      reviewerRating: 4.6,
+      reviewText: "Jammy and a bit heavy.",
+    });
+    expect(signals.reviewerBand).toBe("loved");
+    expect(signals.hasReviewText).toBe(true);
+    expect(signals.reviewThemes).toEqual(expect.arrayContaining(["fruit", "heavy"]));
+  });
 });

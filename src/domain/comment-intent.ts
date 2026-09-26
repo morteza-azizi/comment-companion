@@ -7,20 +7,14 @@ export type CommentIntentType =
   | "OLD_VINTAGE_FIND"
   | "APPRECIATE_REGION"
   | "DISCOVER_PRODUCER"
-  | "SIMPLE_REACTION"
-  | "GENERIC"
   | "QUESTION";
 
-// Informative slots first, question last. Wishlist/radar is not a default
-// intent — those lines were crowding out grape and pairing comments.
 export const INTENT_ORDER: readonly CommentIntentType[] = [
   "GRAPE_PROFILE",
-  "FOOD_PAIRING",
   "OLD_VINTAGE_FIND",
   "APPRECIATE_REGION",
+  "FOOD_PAIRING",
   "DISCOVER_PRODUCER",
-  "SIMPLE_REACTION",
-  "GENERIC",
   "QUESTION",
 ];
 
@@ -39,33 +33,16 @@ export function selectAvailableIntents(context: WineContext, signals: WineSignal
   if (signals.regionKnowledge) {
     intents.push("APPRECIATE_REGION");
   }
-  if (signals.hasProducer) {
+  if (signals.hasProducer && signals.grapeKnowledge) {
     intents.push("DISCOVER_PRODUCER");
   }
-
-  intents.push("SIMPLE_REACTION");
-
-  // When grape/region knowledge is missing, fill the panel with generic
-  // reactions instead of leaving the user with one blind "Nice pick."
-  if (!signals.grapeKnowledge) {
-    intents.push("GENERIC");
-  }
-
-  if (hasAnyQuestionableFact(context, signals)) {
+  if (hasSpecificQuestion(context, signals)) {
     intents.push("QUESTION");
   }
 
   return INTENT_ORDER.filter((intent) => intents.includes(intent));
 }
 
-function hasAnyQuestionableFact(context: WineContext, signals: WineSignals): boolean {
-  return Boolean(
-    signals.primaryGrape ||
-      signals.associatedGrape ||
-      context.region ||
-      context.producer ||
-      signals.hasVintage ||
-      context.wineName ||
-      context.country
-  );
+function hasSpecificQuestion(context: WineContext, signals: WineSignals): boolean {
+  return Boolean(signals.grapeKnowledge && typeof context.vintage === "number" && signals.drinkStyle === "age");
 }
