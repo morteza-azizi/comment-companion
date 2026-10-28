@@ -1,32 +1,39 @@
-import type { ContributionIdea, ContributionReason } from "./contribution";
 import { normalizeText } from "./text-match";
 
-export type Novelty = "NEW" | "RECENTLY_USED" | "PREVIOUSLY_USED";
+// Repetition has three different meanings, and they are treated differently:
+//
+//   SAME_WORDING          the same sentence skeleton again (only the wine's
+//                         own quoted words changed). Interchangeable.
+//   SAME_IDEA             a different sentence, but the same kind of move on
+//                         the same concept (e.g. "ask about timing of the
+//                         tannins" twice). Interchangeable.
+//   SAME_TOPIC_NEW_ANGLE  the same wine topic reached a different way
+//                         (a question about acidity, then a comparison
+//                         involving acidity). Fine, even welcome.
 
-export interface AngleInput {
-  topics?: readonly string[];
-  concepts?: readonly string[];
-  reason?: ContributionReason | string;
-  angle?: string;
+export type Repetition = "NEW" | "SAME_TOPIC_NEW_ANGLE" | "SAME_IDEA" | "SAME_WORDING";
+
+export interface IdeaKey {
+  type: string;
+  dimension: string;
+  concepts: readonly string[];
 }
 
-export interface NoveltyAssessment {
-  novelty: Novelty;
-  similarity: number;
-  penalty: number;
-  matchedFingerprint?: string;
+export interface PastUse extends IdeaKey {
+  comment?: string;
+  at: number;
 }
 
-const DAY_MS = 86_400_000;
-const RECENT_MS = 2 * DAY_MS;
-const YEAR_MS = 365 * DAY_MS;
+export interface RepetitionAssessment {
+  kind: Repetition;
+  matched?: PastUse;
+}
 
-const RECENT_INDEX_WINDOW = 6;
-const MEDIUM_INDEX_WINDOW = 30;
+export const RECENT_USE_COUNT = 5;
+export const RECENT_USE_MS = 14 * 86_400_000;
 
 const SIMILARITY_THRESHOLD = 0.5;
-const RECENT_PENALTY = 40;
-const MEDIUM_PENALTY = 12;
+const WORDING_THRESHOLD = 0.75;
 
 export function slug(text: string): string {
   return normalizeText(text)
@@ -34,124 +41,99 @@ export function slug(text: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export function fingerprintAngle(input: AngleInput): string {
-  const tokens = new Set<string>();
-  for (const concept of input.concepts ?? []) {
+export function conceptSet(concepts: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const concept of concepts) {
     const s = slug(concept);
-    if (s) tokens.add(s);
+    if (s) out.add(s);
   }
-  if (input.angle) {
-    const s = slug(input.angle);
-    if (s) tokens.add(s);
-  }
-  if (input.reason) tokens.add(slug(String(input.reason)));
-  const topic = input.topics?.[0];
-  if (topic) tokens.add(slug(topic));
-  return [...tokens].sort().join("|");
+  return out;
 }
 
-export function attachAngle(idea: ContributionIdea): ContributionIdea {
-  return {
-    ...idea,
-    angleFingerprint: fingerprintAngle(idea),
-  };
+export function fingerprintIdea(key: IdeaKey): string {
+  return [key.type, key.dimension, [...conceptSet(key.concepts)].sort().join("+")].join("|");
 }
 
-export function ideaConceptTokens(input: AngleInput): Set<string> {
-  const tokens = new Set<string>();
-  for (const concept of input.concepts ?? []) addConcept(tokens, concept);
-  if (input.angle) addConcept(tokens, input.angle);
-  return tokens;
+export function angleSimilarity(left: readonly string[], right: readonly string[]): number {
+  return jaccard(conceptSet(left), conceptSet(right));
 }
 
-export function angleSimilarity(left: AngleInput, right: AngleInput): number {
-  return jaccard(ideaConceptTokens(left), ideaConceptTokens(right));
+function overlapCount(left: readonly string[], right: readonly string[]): number {
+  const a = conceptSet(left);
+  const b = conceptSet(right);
+  let count = 0;
+  for (const item of a) if (b.has(item)) count += 1;
+  return count;
 }
 
-export function isSameIntellectualAngle(left: AngleInput, right: AngleInput): boolean {
-  const a = ideaConceptTokens(left);
-  const b = ideaConceptTokens(right);
+/** Same kind of move on essentially the same concepts. */
+export function isSameIdea(left: IdeaKey, right: IdeaKey): boolean {
+  if (left.type !== right.type || left.dimension !== right.dimension) return false;
+  const a = conceptSet(left.concepts);
+  const b = conceptSet(right.concepts);
   if (a.size === 0 || b.size === 0) return false;
-  const overlap = intersectionSize(a, b);
   if (jaccard(a, b) >= SIMILARITY_THRESHOLD) return true;
+  const overlap = overlapCount(left.concepts, right.concepts);
   return overlap >= 2 && (overlap === a.size || overlap === b.size);
 }
 
-export function alreadySaidThis(candidate: AngleInput, previous: AngleInput): boolean {
-  return isSameIntellectualAngle(candidate, previous);
+/** Same wine topic (dimension and at least one concept), regardless of the move made. */
+export function sharesTopic(left: IdeaKey, right: IdeaKey): boolean {
+  return left.dimension === right.dimension && overlapCount(left.concepts, right.concepts) > 0;
 }
 
-export function noveltyFromAge(ageMs: number | undefined, indexDistance: number): Novelty {
-  if (ageMs !== undefined) {
-    if (ageMs <= RECENT_MS) return "RECENTLY_USED";
-    if (ageMs <= YEAR_MS) return "PREVIOUSLY_USED";
-    return "NEW";
+/**
+ * The sentence skeleton: the comment with quoted material removed. The
+ * quotes are the wine-specific part; what remains is the reusable template.
+ */
+export function skeletonOf(comment: string): string {
+  return normalizeText(
+    comment
+      .replace(/[“"][^”"]*[”"]/g, " ")
+      .replace(/\b(?:19|20)\d{2}\b/g, " ")
+      .replace(/[^\p{L}\s]/gu, " "),
+  );
+}
+
+export function wordingSimilarity(left: string, right: string): number {
+  const a = new Set(skeletonOf(left).split(" ").filter((word) => word.length > 2));
+  const b = new Set(skeletonOf(right).split(" ").filter((word) => word.length > 2));
+  return jaccard(a, b);
+}
+
+export function isSameWording(left: string, right: string): boolean {
+  return wordingSimilarity(left, right) >= WORDING_THRESHOLD;
+}
+
+/** Only recent uses matter: last few, within a couple of weeks. */
+export function recentUses(uses: readonly PastUse[], now = Date.now()): PastUse[] {
+  return uses.filter((use) => now - use.at <= RECENT_USE_MS).slice(-RECENT_USE_COUNT);
+}
+
+export function assessRepetition(
+  candidate: IdeaKey,
+  comment: string | undefined,
+  uses: readonly PastUse[],
+  now = Date.now(),
+): RepetitionAssessment {
+  let best: RepetitionAssessment = { kind: "NEW" };
+  for (const use of recentUses(uses, now)) {
+    if (comment && use.comment && isSameWording(comment, use.comment)) {
+      return { kind: "SAME_WORDING", matched: use };
+    }
+    if (isSameIdea(candidate, use)) {
+      best = { kind: "SAME_IDEA", matched: use };
+    } else if (best.kind === "NEW" && sharesTopic(candidate, use)) {
+      best = { kind: "SAME_TOPIC_NEW_ANGLE", matched: use };
+    }
   }
-  if (indexDistance <= RECENT_INDEX_WINDOW) return "RECENTLY_USED";
-  if (indexDistance <= MEDIUM_INDEX_WINDOW) return "PREVIOUSLY_USED";
-  return "NEW";
-}
-
-export function penaltyForNovelty(novelty: Novelty): number {
-  if (novelty === "RECENTLY_USED") return RECENT_PENALTY;
-  if (novelty === "PREVIOUSLY_USED") return MEDIUM_PENALTY;
-  return 0;
-}
-
-export function assessNoveltyAgainst(
-  candidate: AngleInput,
-  previous: readonly (AngleInput & { at?: number })[],
-  now = Date.now()
-): NoveltyAssessment {
-  let best: NoveltyAssessment = { novelty: "NEW", similarity: 0, penalty: 0 };
-
-  previous.forEach((entry, index) => {
-    if (!isSameIntellectualAngle(candidate, entry) && angleSimilarity(candidate, entry) < SIMILARITY_THRESHOLD) {
-      return;
-    }
-    const similarity = Math.max(angleSimilarity(candidate, entry), isSameIntellectualAngle(candidate, entry) ? 1 : 0);
-    const ageMs = entry.at !== undefined ? now - entry.at : undefined;
-    const indexDistance = previous.length - index;
-    const novelty = noveltyFromAge(ageMs, indexDistance);
-    const penalty = penaltyForNovelty(novelty);
-    if (penalty > best.penalty || (penalty === best.penalty && similarity > best.similarity)) {
-      best = {
-        novelty,
-        similarity,
-        penalty,
-        matchedFingerprint: fingerprintAngle(entry),
-      };
-    }
-  });
-
   return best;
-}
-
-export function ideaAngleInput(idea: Pick<ContributionIdea, "topics" | "reason" | "angle" | "concepts">): AngleInput {
-  return {
-    topics: idea.topics,
-    concepts: idea.concepts,
-    reason: idea.reason,
-    angle: idea.angle,
-  };
-}
-
-function addConcept(tokens: Set<string>, value: string): void {
-  const whole = slug(value);
-  if (whole) tokens.add(whole);
 }
 
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 && b.size === 0) return 0;
-  const overlap = intersectionSize(a, b);
+  let overlap = 0;
+  for (const item of a) if (b.has(item)) overlap += 1;
   const union = a.size + b.size - overlap;
   return union === 0 ? 0 : overlap / union;
-}
-
-function intersectionSize(a: Set<string>, b: Set<string>): number {
-  let count = 0;
-  for (const token of a) {
-    if (b.has(token)) count += 1;
-  }
-  return count;
 }

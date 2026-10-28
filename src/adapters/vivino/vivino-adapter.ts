@@ -3,7 +3,7 @@ import { VivinoInjector } from "./injector";
 
 export class VivinoAdapter implements SiteAdapter {
   public isSupported(): boolean {
-    return window.location.hostname.includes("vivino");
+    return window.location.hostname === "vivino.com" || window.location.hostname.endsWith(".vivino.com");
   }
 
   public inject(): void {
