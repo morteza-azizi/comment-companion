@@ -1,24 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "Comment Companion",
-  "version": "0.1.0",
-  "description": "Reusable comments across community platforms.",
+  "name": "Vivino Conversation Companion",
+  "version": "0.2.0",
+  "description": "Helps me decide whether I have something worth saying about a Vivino review, and suggests one honest conversation starter. Never posts anything.",
 
   "permissions": ["storage"],
 
-  "host_permissions": [
-    "https://www.vivino.com/*",
-    "https://www.linkedin.com/*"
-  ],
+  "host_permissions": ["https://www.vivino.com/*"],
 
   "content_scripts": [
     {
-      "matches": ["https://www.vivino.com/*", "https://www.linkedin.com/*"],
+      "matches": ["https://www.vivino.com/*"],
       "js": ["src/content/content.ts"]
     }
   ],
 
   "action": {
-    "default_title": "Comment Companion"
+    "default_title": "Vivino Conversation Companion"
   }
 }

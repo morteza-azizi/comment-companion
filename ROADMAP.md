@@ -1,40 +1,21 @@
 # Roadmap
 
-## v0.1
+## Done (v0.2)
 
-- Vivino adapter
-- Random comments
-- Local comment library
+- Vivino-only extension: analysis, SKIP/COMMENT decision, single grounded comment
+- Manual input and extraction-failure fallback
+- Quality gate against invented experience and characteristics
+- Local history, repetition detection (wording / idea / topic), optional manual outcomes
 
-## v0.2
+## Next
 
-- Categories
-- Favorites
+- Verify review-card selectors against a logged-in Vivino session and tighten the extractor
+- Options page: export and clear local history
+- More tasting vocabulary and non-English reviews
+- Use the user's own recorded outcomes to rank angles
 
-## v0.3
+## Not planned
 
-- Keyboard shortcuts
-
-## v0.4
-
-- AI-assisted rewrites
-
-## v0.5
-
-- Personal tasting history matching: import your own wine ratings (e.g. a
-  Vivino export CSV), stored locally only (`chrome.storage.local`, no
-  cloud dependency).
-- Fuzzy-match wines seen in the feed (via `WinePageExtractor`) against your
-  imported history on wine name + producer (+ vintage as a tie-breaker),
-  biased toward false negatives — an unmatched wine just falls back to the
-  existing non-tasting-claim comments, never a wrong personal claim.
-- On a verified match, generate honest first-person comments based on your
-  actual rating band (e.g. loved it / solid / mixed / not a favorite),
-  optionally pulling a short snippet from your own tasting note if present.
-- Needs a simple options page (paste/upload CSV) since this data has to be
-  imported somewhere — the current `storage` permission in the manifest is
-  otherwise unused.
-
-## v1.0
-
-- Multi-platform support
+- Auto-posting or filling Vivino's comment box
+- Engagement or volume metrics
+- Backend, accounts or cloud sync
